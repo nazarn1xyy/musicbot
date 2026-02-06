@@ -1,0 +1,5 @@
+aiogram>=3.0
+ytmusicapi
+yt-dlp
+aiofiles
+mutagen
