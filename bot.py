@@ -8,7 +8,7 @@ from aiogram.types import (
 )
 
 from config import BOT_TOKEN
-from music_service import search_songs, download_song, cleanup_file, get_lyrics
+from music_service import search_songs, download_song, cleanup_file, get_lyrics, get_video_info
 
 
 bot = Bot(token=BOT_TOKEN)
@@ -172,6 +172,106 @@ async def queue_handler(message: types.Message):
         f"⏳ В ожидании: {waiting}",
         parse_mode="HTML"
     )
+
+
+@dp.message(F.text.regexp(r"(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/"))
+async def youtube_link_handler(message: types.Message):
+    """Handle YouTube links directly"""
+    url = message.text.strip()
+    
+    status_msg = await message.answer("🔍 Получаю информацию о видео...")
+    
+    # Run in executor to not block async loop
+    loop = asyncio.get_event_loop()
+    song = await loop.run_in_executor(None, get_video_info, url)
+    
+    if not song:
+        await status_msg.edit_text("❌ Не удалось получить информацию. Проверь ссылку.")
+        try:
+            await asyncio.sleep(3)
+            await status_msg.delete()
+        except:
+            pass
+        return
+        
+    video_id = song.video_id
+    title = song.title
+    artist = song.artist
+    thumbnail = song.thumbnail
+    
+    # Add to queue
+    download_queue.append(video_id)
+    queue_position = len(download_queue)
+    
+    if queue_position > MAX_CONCURRENT_DOWNLOADS:
+        await status_msg.edit_text(f"📋 В очереди: #{queue_position - MAX_CONCURRENT_DOWNLOADS}")
+    else:
+        await status_msg.edit_text("⏳ Скачиваю...")
+    
+    try:
+        async with download_semaphore:
+            # Update status if we were waiting
+            if queue_position > MAX_CONCURRENT_DOWNLOADS:
+                 await status_msg.edit_text("⏳ Скачиваю...")
+
+            filepath = await download_song(video_id, title, artist, thumbnail)
+            
+            if video_id in download_queue:
+                download_queue.remove(video_id)
+            
+            if not filepath:
+                await status_msg.edit_text("❌ Не удалось скачать. Возможно видео недоступно.")
+                return
+            
+            thumb_path = None
+            try:
+                audio_file = FSInputFile(filepath)
+                
+                # Download thumbnail for Telegram
+                if thumbnail:
+                    import requests
+                    import tempfile
+                    try:
+                        resp = requests.get(thumbnail, timeout=10)
+                        if resp.status_code == 200:
+                            thumb_path = tempfile.NamedTemporaryFile(suffix='.jpg', delete=False).name
+                            with open(thumb_path, 'wb') as f:
+                                f.write(resp.content)
+                    except:
+                        pass
+                
+                if thumb_path:
+                    thumb_file = FSInputFile(thumb_path)
+                    sent_message = await message.answer_audio(
+                        audio=audio_file,
+                        thumbnail=thumb_file,
+                        title=title,
+                        performer=artist
+                    )
+                else:
+                    sent_message = await message.answer_audio(
+                        audio=audio_file,
+                        title=title,
+                        performer=artist
+                    )
+                
+                if sent_message.audio:
+                    audio_cache[video_id] = sent_message.audio.file_id
+                    
+            finally:
+                cleanup_file(filepath)
+                if thumb_path:
+                    import os
+                    try:
+                        os.remove(thumb_path)
+                    except:
+                        pass
+    finally:
+         # Delete status message
+         try:
+             await status_msg.delete()
+         except:
+             pass
 
 
 @dp.message(F.text & ~F.text.startswith("/"))

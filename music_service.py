@@ -200,6 +200,54 @@ async def download_song(video_id: str, title: str = "", artist: str = "", thumbn
     return None
 
 
+def get_video_info(url: str) -> Optional[Song]:
+    """
+    Extract video information from YouTube URL
+    
+    Args:
+        url: YouTube URL
+        
+    Returns:
+        Song object or None if extraction failed
+    """
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+    }
+    
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            
+            if not info:
+                return None
+                
+            video_id = info.get('id')
+            title = info.get('title', 'Unknown')
+            artist = info.get('artist') or info.get('uploader', 'Unknown')
+            duration_seconds = info.get('duration', 0)
+            
+            # Format duration
+            minutes = duration_seconds // 60
+            seconds = duration_seconds % 60
+            duration = f"{minutes}:{seconds:02d}"
+            
+            # Get best thumbnail
+            thumbnail = info.get('thumbnail')
+            
+            return Song(
+                video_id=video_id,
+                title=title,
+                artist=artist,
+                duration=duration,
+                thumbnail=thumbnail
+            )
+    except Exception as e:
+        print(f"Error extracting video info: {e}")
+        return None
+
+
 def cleanup_file(filepath: str) -> None:
     """Remove temporary file"""
     try:
